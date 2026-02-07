@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import api from '@/lib/api';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -47,24 +47,25 @@ import {
 import { cn } from '@/lib/utils';
 
 interface Student {
-  id: string;
-  user_id: string;
+  _id: string; // Changed from id to _id for MongoDB
   gpa: number;
-  is_flagged: boolean;
-  enrollment_date: string;
-  departments: {
-    name: string;
-  } | null;
-  profiles: {
-    full_name: string;
+  isFlagged: boolean; // Changed case
+  enrollmentDate: string; // Changed case
+  department: string;
+  user: {
+    fullName: string;
+    email: string;
+  };
+  profiles: { // Kept for compatibility if backend maps it
+    fullName: string;
     email: string;
   };
   student_comments: {
     comment: string;
   }[];
   ai_analyses: {
-    sentiment_score: number | null;
-    mood_classification: string | null;
+    sentimentScore: number | null; // Changed case
+    moodClassification: string | null; // Changed case
   }[];
 }
 
@@ -94,23 +95,8 @@ export default function StudentsExplorer() {
 
   const fetchStudents = async () => {
     try {
-      const { data, error } = await supabase
-        .from('students')
-        .select(`
-          id,
-          user_id,
-          gpa,
-          is_flagged,
-          enrollment_date,
-          departments(name),
-          profiles!inner(full_name, email),
-          student_comments(comment),
-          ai_analyses(sentiment_score, mood_classification)
-        `)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setStudents((data as unknown as Student[]) || []);
+      const { data } = await api.get('/students');
+      setStudents(data || []);
     } catch (error) {
       console.error('Error fetching students:', error);
     } finally {
@@ -126,19 +112,19 @@ export default function StudentsExplorer() {
       const query = searchQuery.toLowerCase();
       result = result.filter(
         (s) =>
-          s.profiles.full_name.toLowerCase().includes(query) ||
-          s.profiles.email.toLowerCase().includes(query) ||
-          s.departments?.name?.toLowerCase().includes(query)
+          s.user?.fullName.toLowerCase().includes(query) ||
+          s.user?.email.toLowerCase().includes(query) ||
+          s.department?.toLowerCase().includes(query)
       );
     }
 
     // Sentiment filter
     if (sentimentFilter !== 'all') {
       result = result.filter((s) => {
-        const score = s.ai_analyses?.[0]?.sentiment_score;
-        if (sentimentFilter === 'frustrated') return score !== null && score < 40;
-        if (sentimentFilter === 'neutral') return score !== null && score >= 40 && score < 70;
-        if (sentimentFilter === 'motivated') return score !== null && score >= 70;
+        const score = s.ai_analyses?.[0]?.sentimentScore;
+        if (sentimentFilter === 'frustrated') return score !== null && score !== undefined && score < 40;
+        if (sentimentFilter === 'neutral') return score !== null && score !== undefined && score >= 40 && score < 70;
+        if (sentimentFilter === 'motivated') return score !== null && score !== undefined && score >= 70;
         return true;
       });
     }
@@ -152,17 +138,14 @@ export default function StudentsExplorer() {
 
     // Fetch skill data (scores by subject)
     try {
-      const { data } = await supabase
-        .from('student_scores')
-        .select('subject, score, max_score')
-        .eq('student_id', student.id);
+      const { data } = await api.get(`/students/${student._id}`);
 
-      if (data) {
+      if (data && data.student_scores) {
         // Aggregate scores by subject
         const subjectScores: Record<string, { total: number; count: number; max: number }> = {};
-        data.forEach((score) => {
+        data.student_scores.forEach((score: any) => {
           if (!subjectScores[score.subject]) {
-            subjectScores[score.subject] = { total: 0, count: 0, max: score.max_score || 100 };
+            subjectScores[score.subject] = { total: 0, count: 0, max: score.maxScore || 100 };
           }
           subjectScores[score.subject].total += score.score;
           subjectScores[score.subject].count += 1;
@@ -261,12 +244,12 @@ export default function StudentsExplorer() {
                   </TableHeader>
                   <TableBody>
                     {filteredStudents.map((student) => {
-                      const sentiment = getSentimentBadge(student.ai_analyses?.[0]?.sentiment_score);
+                      const sentiment = getSentimentBadge(student.ai_analyses?.[0]?.sentimentScore);
                       const latestComment = student.student_comments?.[0]?.comment;
 
                       return (
                         <TableRow
-                          key={student.id}
+                          key={student._id}
                           className="cursor-pointer hover:bg-muted/50 transition-colors"
                           onClick={() => handleStudentClick(student)}
                         >
@@ -276,14 +259,14 @@ export default function StudentsExplorer() {
                                 <User className="h-5 w-5 text-primary" />
                               </div>
                               <div>
-                                <p className="font-medium">{student.profiles.full_name}</p>
+                                <p className="font-medium">{student.user?.fullName}</p>
                                 <p className="text-sm text-muted-foreground">
-                                  {student.profiles.email}
+                                  {student.user?.email}
                                 </p>
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell>{student.departments?.name || 'N/A'}</TableCell>
+                          <TableCell>{student.department || 'N/A'}</TableCell>
                           <TableCell>
                             <span className="font-mono font-medium">
                               {student.gpa?.toFixed(2) || 'N/A'}
@@ -298,7 +281,7 @@ export default function StudentsExplorer() {
                             </p>
                           </TableCell>
                           <TableCell>
-                            {student.is_flagged && (
+                            {student.isFlagged && (
                               <Badge variant="destructive" className="animate-pulse">
                                 Flagged
                               </Badge>
@@ -332,16 +315,16 @@ export default function StudentsExplorer() {
                     <User className="h-6 w-6 text-primary" />
                   </div>
                   <div>
-                    <p>{selectedStudent.profiles.full_name}</p>
+                    <p>{selectedStudent.user?.fullName}</p>
                     <p className="text-sm font-normal text-muted-foreground">
-                      {selectedStudent.profiles.email}
+                      {selectedStudent.user?.email}
                     </p>
                   </div>
                 </DialogTitle>
                 <DialogDescription>
-                  {selectedStudent.departments?.name || 'No department'} • Enrolled{' '}
-                  {selectedStudent.enrollment_date
-                    ? new Date(selectedStudent.enrollment_date).toLocaleDateString()
+                  {selectedStudent.department || 'No department'} • Enrolled{' '}
+                  {selectedStudent.enrollmentDate
+                    ? new Date(selectedStudent.enrollmentDate).toLocaleDateString()
                     : 'N/A'}
                 </DialogDescription>
               </DialogHeader>
@@ -357,16 +340,16 @@ export default function StudentsExplorer() {
                   <div className="p-4 rounded-xl bg-muted/50 text-center">
                     <Calendar className="h-5 w-5 mx-auto mb-2 text-accent" />
                     <p className="text-2xl font-bold">
-                      {selectedStudent.ai_analyses?.[0]?.sentiment_score || 'N/A'}%
+                      {selectedStudent.ai_analyses?.[0]?.sentimentScore || 'N/A'}%
                     </p>
                     <p className="text-sm text-muted-foreground">Sentiment</p>
                   </div>
                   <div className="p-4 rounded-xl bg-muted/50 text-center">
                     <Badge
-                      variant={getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentiment_score).variant}
+                      variant={getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentimentScore).variant}
                       className="mb-2"
                     >
-                      {getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentiment_score).label}
+                      {getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentimentScore).label}
                     </Badge>
                     <p className="text-sm text-muted-foreground">Mood</p>
                   </div>

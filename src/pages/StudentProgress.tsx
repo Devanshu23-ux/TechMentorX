@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import api from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,69 +48,30 @@ export default function StudentProgress() {
 
   const fetchStudentData = async () => {
     try {
-      // Get student record
-      const { data: student } = await supabase
-        .from('students')
-        .select('id, gpa')
-        .eq('user_id', user?.id)
-        .single();
+      const { data } = await api.get('/students/me');
 
-      if (!student) {
-        setLoading(false);
-        return;
-      }
+      const { student, attendance, latestWellbeing, latestAnalysis, scores } = data;
 
-      // Get attendance rate
-      const { data: attendance } = await supabase
-        .from('student_attendance')
-        .select('status')
-        .eq('student_id', student.id);
-
-      const presentCount = attendance?.filter((a) => a.status === 'present').length || 0;
+      // Calculate attendance rate
+      const presentCount = attendance?.filter((a: any) => a.status === 'present').length || 0;
       const attendanceRate = attendance?.length
         ? Math.round((presentCount / attendance.length) * 100)
         : 0;
 
-      // Get latest wellbeing
-      const { data: wellbeing } = await supabase
-        .from('student_wellbeing')
-        .select('mood')
-        .eq('student_id', student.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      // Get latest AI feedback
-      const { data: analysis } = await supabase
-        .from('ai_analyses')
-        .select('mood_classification')
-        .eq('student_id', student.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
       setStudentData({
         gpa: student.gpa || 0,
         attendanceRate,
-        latestMood: wellbeing?.mood || 'Not recorded',
-        latestFeedback: analysis?.mood_classification || 'No feedback yet',
+        latestMood: latestWellbeing?.mood || 'Not recorded',
+        latestFeedback: latestAnalysis?.moodClassification || 'No feedback yet',
       });
 
-      // Get performance trend
-      const { data: scores } = await supabase
-        .from('student_scores')
-        .select('score, max_score, assessment_date')
-        .eq('student_id', student.id)
-        .order('assessment_date', { ascending: true })
-        .limit(10);
-
       if (scores) {
-        const trends = scores.map((s) => ({
-          date: new Date(s.assessment_date).toLocaleDateString('en-US', {
+        const trends = scores.map((s: any) => ({
+          date: new Date(s.assessmentDate).toLocaleDateString('en-US', {
             month: 'short',
             day: 'numeric',
           }),
-          score: Math.round((s.score / (s.max_score || 100)) * 100),
+          score: Math.round((s.score / (s.maxScore || 100)) * 100),
         }));
         setPerformanceTrend(trends);
       }

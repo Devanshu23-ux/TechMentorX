@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import api from '@/lib/api';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -21,11 +21,14 @@ import {
 import { cn } from '@/lib/utils';
 
 interface FlaggedStudent {
-  id: string;
-  user_id: string;
+  _id: string; // MongoDB ID
+  user: {
+    fullName: string;
+    email: string;
+  };
   gpa: number;
-  flag_reason: string | null;
-  profiles: {
+  flagReason: string | null;
+  profiles: { // compatibility
     full_name: string;
     email: string;
   };
@@ -35,10 +38,10 @@ interface FlaggedStudent {
     created_at: string;
   }[];
   ai_analyses: {
-    sentiment_score: number | null;
-    mood_classification: string | null;
-    topic_gaps: string[] | null;
-    intervention_plan: any;
+    sentimentScore: number | null;
+    moodClassification: string | null;
+    topicGaps: string[] | null;
+    interventionPlan: any;
   }[];
 }
 
@@ -63,29 +66,18 @@ export default function AIAuditor() {
 
   const fetchFlaggedStudents = async () => {
     try {
-      const { data, error } = await supabase
-        .from('students')
-        .select(`
-          id,
-          user_id,
-          gpa,
-          flag_reason,
-          profiles!inner(full_name, email),
-          student_comments(id, comment, created_at),
-          ai_analyses(sentiment_score, mood_classification, topic_gaps, intervention_plan)
-        `)
-        .eq('is_flagged', true)
-        .order('created_at', { ascending: false });
+      const { data } = await api.get('/students'); // Fetch all, then filter. Backend could optimize this.
 
-      if (error) throw error;
-      setFlaggedStudents((data as unknown as FlaggedStudent[]) || []);
-      
+      const flagged = data.filter((s: any) => s.isFlagged);
+
+      setFlaggedStudents(flagged);
+
       // Auto-select first student
-      if (data && data.length > 0) {
-        const firstStudent = data[0] as unknown as FlaggedStudent;
+      if (flagged.length > 0) {
+        const firstStudent = flagged[0];
         setSelectedStudent(firstStudent);
-        if (firstStudent.ai_analyses?.[0]?.intervention_plan) {
-          setInterventionPlan(firstStudent.ai_analyses[0].intervention_plan as InterventionPlan);
+        if (firstStudent.ai_analyses?.[0]?.interventionPlan) {
+          setInterventionPlan(firstStudent.ai_analyses[0].interventionPlan);
         }
       }
     } catch (error) {
@@ -98,64 +90,43 @@ export default function AIAuditor() {
   const handleSelectStudent = (student: FlaggedStudent) => {
     setSelectedStudent(student);
     setInterventionPlan(null);
-    
+
     // Check for existing intervention plan
-    if (student.ai_analyses?.[0]?.intervention_plan) {
-      setInterventionPlan(student.ai_analyses[0].intervention_plan as InterventionPlan);
+    if (student.ai_analyses?.[0]?.interventionPlan) {
+      setInterventionPlan(student.ai_analyses[0].interventionPlan);
     }
   };
 
   const generateIntervention = async () => {
     if (!selectedStudent) return;
-    
+
     setGenerating(true);
     setInterventionPlan(null);
 
     try {
-      // Call the AI edge function
-      const { data, error } = await supabase.functions.invoke('generate-intervention', {
-        body: {
-          studentId: selectedStudent.id,
-          studentName: selectedStudent.profiles.full_name,
-          gpa: selectedStudent.gpa,
-          flagReason: selectedStudent.flag_reason,
-          recentComment: selectedStudent.student_comments?.[0]?.comment,
-          sentimentScore: selectedStudent.ai_analyses?.[0]?.sentiment_score,
-          topicGaps: selectedStudent.ai_analyses?.[0]?.topic_gaps,
-        },
+      const { data } = await api.post('/ai/generate-intervention', {
+        studentId: selectedStudent._id,
+        studentName: selectedStudent.user.fullName,
+        gpa: selectedStudent.gpa,
+        flagReason: selectedStudent.flagReason,
+        recentComment: selectedStudent.student_comments?.[0]?.comment,
+        sentimentScore: selectedStudent.ai_analyses?.[0]?.sentimentScore,
+        topicGaps: selectedStudent.ai_analyses?.[0]?.topicGaps,
       });
 
-      if (error) throw error;
-
       setInterventionPlan(data.plan);
-      
+
       toast({
         title: 'Intervention Generated',
         description: 'AI has created a personalized support plan.',
       });
     } catch (error: any) {
       console.error('Error generating intervention:', error);
-      
-      // Handle rate limit errors
-      if (error?.message?.includes('429') || error?.status === 429) {
-        toast({
-          title: 'Rate Limit Exceeded',
-          description: 'Please wait a moment and try again.',
-          variant: 'destructive',
-        });
-      } else if (error?.message?.includes('402') || error?.status === 402) {
-        toast({
-          title: 'Credits Required',
-          description: 'Please add credits to continue using AI features.',
-          variant: 'destructive',
-        });
-      } else {
-        toast({
-          title: 'Generation Failed',
-          description: 'Could not generate intervention plan. Please try again.',
-          variant: 'destructive',
-        });
-      }
+      toast({
+        title: 'Generation Failed',
+        description: 'Could not generate intervention plan. Please try again.',
+        variant: 'destructive',
+      });
     } finally {
       setGenerating(false);
     }
@@ -205,12 +176,12 @@ export default function AIAuditor() {
                 ) : flaggedStudents.length > 0 ? (
                   <div className="p-2">
                     {flaggedStudents.map((student) => {
-                      const sentiment = getSentimentBadge(student.ai_analyses?.[0]?.sentiment_score);
-                      const isSelected = selectedStudent?.id === student.id;
-                      
+                      const sentiment = getSentimentBadge(student.ai_analyses?.[0]?.sentimentScore);
+                      const isSelected = selectedStudent?._id === student._id;
+
                       return (
                         <button
-                          key={student.id}
+                          key={student._id}
                           onClick={() => handleSelectStudent(student)}
                           className={cn(
                             'w-full p-4 rounded-xl text-left transition-all duration-200 mb-2',
@@ -226,7 +197,7 @@ export default function AIAuditor() {
                               </div>
                               <div>
                                 <p className="font-medium text-foreground">
-                                  {student.profiles.full_name}
+                                  {student.user.fullName}
                                 </p>
                                 <p className="text-sm text-muted-foreground">
                                   GPA: {student.gpa?.toFixed(2) || 'N/A'}
@@ -257,11 +228,11 @@ export default function AIAuditor() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle>{selectedStudent.profiles.full_name}</CardTitle>
-                      <CardDescription>{selectedStudent.profiles.email}</CardDescription>
+                      <CardTitle>{selectedStudent.user.fullName}</CardTitle>
+                      <CardDescription>{selectedStudent.user.email}</CardDescription>
                     </div>
-                    <Badge variant={getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentiment_score).variant}>
-                      {getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentiment_score).label}
+                    <Badge variant={getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentimentScore).variant}>
+                      {getSentimentBadge(selectedStudent.ai_analyses?.[0]?.sentimentScore).label}
                     </Badge>
                   </div>
                 </CardHeader>
@@ -275,13 +246,13 @@ export default function AIAuditor() {
                     <div className="p-4 rounded-xl bg-muted/50">
                       <p className="text-sm text-muted-foreground">Sentiment</p>
                       <p className="text-2xl font-bold">
-                        {selectedStudent.ai_analyses?.[0]?.sentiment_score || 'N/A'}%
+                        {selectedStudent.ai_analyses?.[0]?.sentimentScore || 'N/A'}%
                       </p>
                     </div>
                     <div className="p-4 rounded-xl bg-muted/50">
                       <p className="text-sm text-muted-foreground">Flag Reason</p>
                       <p className="text-sm font-medium truncate">
-                        {selectedStudent.flag_reason || 'Not specified'}
+                        {selectedStudent.flagReason || 'Not specified'}
                       </p>
                     </div>
                   </div>
@@ -300,13 +271,13 @@ export default function AIAuditor() {
                   )}
 
                   {/* Topic Gaps */}
-                  {selectedStudent.ai_analyses?.[0]?.topic_gaps && selectedStudent.ai_analyses[0].topic_gaps.length > 0 && (
+                  {selectedStudent.ai_analyses?.[0]?.topicGaps && selectedStudent.ai_analyses[0].topicGaps.length > 0 && (
                     <div>
                       <h4 className="text-sm font-medium text-muted-foreground mb-2">
                         Identified Learning Gaps
                       </h4>
                       <div className="flex flex-wrap gap-2">
-                        {selectedStudent.ai_analyses[0].topic_gaps.map((gap, i) => (
+                        {selectedStudent.ai_analyses[0].topicGaps.map((gap, i) => (
                           <Badge key={i} variant="outline" className="bg-warning/10">
                             {gap}
                           </Badge>
@@ -416,6 +387,6 @@ export default function AIAuditor() {
           </Card>
         </div>
       </div>
-    </DashboardLayout>
+    </DashboardLayout >
   );
 }

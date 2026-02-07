@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
+import api from '@/lib/api'; // Changed import
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -56,80 +56,12 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      // Fetch total students
-      const { count: studentCount } = await supabase
-        .from('students')
-        .select('*', { count: 'exact', head: true });
+      // Use new API endpoint
+      const { data } = await api.get('/students/dashboard');
 
-      // Fetch flagged students count
-      const { count: flaggedCount } = await supabase
-        .from('students')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_flagged', true);
+      setKpiData(data.kpiData);
+      setScatterData(data.scatterData);
 
-      // Fetch latest sentiment scores
-      const { data: sentimentData } = await supabase
-        .from('ai_analyses')
-        .select('sentiment_score')
-        .not('sentiment_score', 'is', null);
-
-      const avgSentiment = sentimentData?.length
-        ? Math.round(
-            sentimentData.reduce((acc, curr) => acc + (curr.sentiment_score || 0), 0) /
-              sentimentData.length
-          )
-        : 0;
-
-      // Fetch attendance for engagement rate
-      const { data: attendanceData } = await supabase
-        .from('student_attendance')
-        .select('status');
-
-      const presentCount = attendanceData?.filter((a) => a.status === 'present').length || 0;
-      const engagementRate = attendanceData?.length
-        ? Math.round((presentCount / attendanceData.length) * 100)
-        : 0;
-
-      setKpiData({
-        totalStudents: studentCount || 0,
-        avgSentiment,
-        highRiskAlerts: flaggedCount || 0,
-        engagementRate,
-      });
-
-      // Fetch scatter plot data
-      const { data: studentsWithData } = await supabase
-        .from('students')
-        .select(`
-          id,
-          user_id,
-          gpa,
-          profiles!inner(full_name),
-          student_wellbeing(stress_level),
-          ai_analyses(sentiment_score, mood_classification)
-        `)
-        .limit(50);
-
-      if (studentsWithData) {
-        const scatterPoints: ScatterDataPoint[] = studentsWithData.map((student: any) => {
-          const latestWellbeing = student.student_wellbeing?.[0];
-          const latestAnalysis = student.ai_analyses?.[0];
-          const sentimentScore = latestAnalysis?.sentiment_score || 50;
-
-          let sentiment: 'frustrated' | 'neutral' | 'motivated' = 'neutral';
-          if (sentimentScore < 40) sentiment = 'frustrated';
-          else if (sentimentScore > 70) sentiment = 'motivated';
-
-          return {
-            name: student.profiles?.full_name || 'Unknown',
-            totalScore: (student.gpa || 0) * 25, // Scale GPA to percentage
-            stressLevel: latestWellbeing?.stress_level || 5,
-            sentiment,
-          };
-        });
-
-        setScatterData(scatterPoints);
-      }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
@@ -200,9 +132,8 @@ export default function Dashboard() {
           {kpiCards.map((card) => (
             <Card
               key={card.title}
-              className={`glass-card border-0 transition-all duration-300 hover:scale-[1.02] ${
-                card.glow ? 'animate-pulse-glow' : ''
-              }`}
+              className={`glass-card border-0 transition-all duration-300 hover:scale-[1.02] ${card.glow ? 'animate-pulse-glow' : ''
+                }`}
             >
               <CardContent className="p-6">
                 {loading ? (
